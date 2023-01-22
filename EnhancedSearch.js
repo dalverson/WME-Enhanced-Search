@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name             WME Enhanced Search
 // @namespace        https://greasyfork.org/en/users/166843-wazedev
-// @version          2023.01.01.01
+// @version          2023.01.21.01
 // @description      Enhances the search box to parse WME PLs and URLs from other maps to move to the location & zoom
 // @author           WazeDev
 // @match            https://www.waze.com/editor*
@@ -347,9 +347,22 @@
             processed = true;
         }
         else if(pasteVal.match(regexs.gmapurl)){
-            let zoom;
+            let zoom = 17;
             let params = pasteVal.split('@').pop().split(',');
-            zoom = (Math.max(12,Math.min(22,(parseInt(params[2])))));
+            let zoomarg = params[2].match(/(\d+)([zm]?)/);
+            if (zoomarg[2] == 'z'){
+                zoom = (Math.max(12,Math.min(22,(parseInt(zoomarg[1])))));
+            }
+            else if (zoomarg[2] == 'm'){
+                let m = zoomarg[1];
+                if (m > 14000) zoom=13;
+                else if (m > 7000) zoom=14;
+                else if (m > 3500) zoom=15;
+                else if (m > 1750) zoom=16;
+                else if (m > 870) zoom=17;
+                else if (m > 430) zoom=18;
+                else zoom=19;
+            }
             jump4326(params[1], params[0], zoom);
             processed = true;
         }
