@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name             WME Enhanced Search
 // @namespace        https://greasyfork.org/en/users/166843-wazedev
-// @version          2025.08.11.01
+// @version          2026.04.19.01
 // @description      Enhances the search box to parse WME PLs and URLs from other maps to move to the location & zoom
 // @author           WazeDev
 // @match            https://www.waze.com/editor*
@@ -10,6 +10,8 @@
 // @match            https://beta.waze.com/*/editor*
 // @exclude          https://www.waze.com/*user/editor*
 // @exclude          https://www.waze.com/discuss/*
+// @exclude          https://www.waze.com/editor/sdk/*
+// @exclude          https://beta.waze.com/editor/sdk/*
 // @grant            GM_xmlhttpRequest
 // @grant            unsafeWindow
 // @connect          c.gle
@@ -34,7 +36,7 @@
 
     const scriptName = 'Enhanced Search';
     const scriptId = 'enh-search';
-    const updateMessage = "Fix selecting items on WME PL paste. Fixed Regex highlighting. Added handling of hazards on PL. Handle link from UR emails.";
+    const updateMessage = "Handle GMaps URLs from international google domains. Removed what3words - needs subscription now. Fixes for new WazeWrap.";
 
     var searchBoxTarget = "#search-autocomplete";
 
@@ -77,21 +79,21 @@
     }
 
     var regexs = {
-        'wazeurl': new RegExp('(?:http(?:s):\/\/)?(?:www\.|beta\.)?waze\.com\/(?:.*?\/)?(editor|livemap)[-a-zA-Z0-9@:%_\+,.~#?&\/\/=]*', "ig"),
-        'gmapurl': new RegExp('(?:http(?:s):\/\/)?(?:www)?google\.com\/(?:.*?\/)?maps[-a-zA-Z0-9@:%_\+,.~#?&\/\/=]*', "ig"),
+        'wazeurl': new RegExp('(?:http(?:s):\/\/)?(?:www\.|beta\.)?waze\.com\/(?:.*?\/)?(editor|livemap|live-map)[-a-zA-Z0-9@:%_\+,.~#?&\/\/=]*', "ig"),
+        'gmapurl': new RegExp('(?:http(?:s):\/\/)?(?:www)?google(?:\.com?)?(?:\.[a-z]{2})?\/(?:.*?\/)?maps[-a-zA-Z0-9@:%_\+,.~#?&\/\/=]*', "ig"),
         'gmapurlold': new RegExp('(?:http(?:s):\\/\\/)?maps.google\\.com\\/(?:.*?\\/)?maps\\?ll=(-?\\d*.\\d*),(-?\\d*.\\d*)'),
         'bingurl': new RegExp('(?:http(?:s):\/\/)?(?:www)?bing\.com\/(?:.*?\/)?maps[-a-zA-Z0-9@:%_\+,.~#?&\/\/=]*'),
         'openstreetmapurl': new RegExp('(?:http(?:s):\/\/)?(?:www)?openstreetmap\.org\/(?:.*?\/)?#map[-a-zA-Z0-9@:%_\+,.~#?&\/\/=]*'),
         'openstreetmapurlold': new RegExp('(?:http(?:s):\\/\\/)?(?:www)?openstreetmap\\.org\\/index\\.html\\?mlat=(-?\\d*.\\d*)&mlon=(-?\\d*.\\d*)&zoom=(\\d+)'),
         'pluscodeurl': new RegExp('(?:http(?:s):\\/\\/)?plus\\.codes\\/([a-zA-Z0-9+]*)'),
-        'what3wordsurl': new RegExp('(?:http(?:s):\\/\\/)?(?:w3w\\.co|map\\.what3words\\.com)\\/(.*\\..*\\..*)', "ig"),
+        // 'what3wordsurl': new RegExp('(?:http(?:s):\\/\\/)?(?:w3w\\.co|map\\.what3words\\.com)\\/(.*\\..*\\..*)', "ig"),
         'place_mc_id': new RegExp('\d*\.\d*\.\d*', "ig"),
         'segmentid': new RegExp('\d*'),
         'mandrillappurl': new RegExp('(?:http(?:s):\/\/)?(?:www\.)?mandrillapp\.com\/(?:.*?\/)?www\.waze\.com[-a-zA-Z0-9@:%_\+,.~#?&\/\/=]*_(.*)', "ig"),
-        'what3wordcode': new RegExp('[a-z]*\.[a-z]*\.[a-z]*', "ig"),
+        // 'what3wordcode': new RegExp('[a-z]*\.[a-z]*\.[a-z]*', "ig"),
         'pluscode': new RegExp('[23456789CFGHJMPQRVWX]{2,8}\\+[23456789CFGHJMPQRVWX]{0,2}'),
         'regexHighlight': new RegExp('^(\\/.*?\\/i?)'),
-        'livemapshareurlold' : new RegExp('(?:http(?:s):\\/\\/)?www.waze\\.com\/ul\\?ll=(-?\\d*.\\d*)(?:(?:%2C)|,)(-?\\d*.\\d*).*'),
+        'livemapshareurlold' : new RegExp('(?:http(?:s):\\/\\/)?(?:www.|ll\.)?waze\\.com\/ul\\?ll=(-?\\d*.\\d*)(?:(?:%2C)|,)(-?\\d*.\\d*).*'),
         'livemapshareurl' : new RegExp('(?:http(?:s):\\/\\/)?www.waze\\.com\/.*\\?latlng=(-?\\d*.\\d*)(?:(?:%2C)|,)(-?\\d*.\\d*).*'),
         'ohgo': new RegExp('(?:http(?:s):\\/\\/)?(?:www\\.)?ohgo\\.com\\/.*\\?lt=(-?\\d*.\\d*)&ln=(-?\\d*.\\d*)&z=(\\d+)'),
         'viewissue': new RegExp('(?:http(?:s):\\/\\/)?(?:www\\.)?c\\.gle\\/([-a-zA-Z0-9]*)'),
@@ -120,6 +122,14 @@
         return turf.booleanIntersects(obj.geometry,bbPoly);
     }
 
+    function eventOff( eventName, eventHandler ) {
+        try {
+            wmeSDK.Events.off({ eventName, eventHandler });
+        } catch(e) {
+            console.info('EnSrch Events.off failed ' + eventName);
+        }
+    }
+
     let placesHighlighted = { ids: [], objectType: "venue" };
     let segmentsHighlighted = { ids: [], objectType: "segment" };
     function regexHighlight(){
@@ -136,10 +146,11 @@
 
             if(query.length < 2)
                 return;
-            WazeWrap.Events.unregister('moveend', window, regexHighlight);
-            WazeWrap.Events.register('moveend', window, regexHighlight);
-            WazeWrap.Events.unregister('zoomend', window, regexHighlight);
-            WazeWrap.Events.register('zoomend', window, regexHighlight);
+
+            eventOff( "wme-map-move-end", regexHighlight );
+            wmeSDK.Events.on({ eventName: "wme-map-move-end", eventHandler:regexHighlight });
+            eventOff( "wme-map-zoom-changed", regexHighlight );
+            wmeSDK.Events.on({ eventName: "wme-map-zoom-changed", eventHandler:regexHighlight });
 
             placesHighlighted.ids = [];
             segmentsHighlighted.ids = [];
@@ -151,20 +162,21 @@
             });
 
             for(let i = 0; i < onscreenSegments.length; i++){
-                if(onscreenSegments[i].primaryStreetId){
-                    const st = wmeSDK.DataModel.Streets.getById( { streetId: onscreenSegments[i].primaryStreetId } );
+                let thisSeg = onscreenSegments[i];
+                if(thisSeg.primaryStreetId){
+                    const st = wmeSDK.DataModel.Streets.getById( { streetId: thisSeg.primaryStreetId } );
                     if(st?.name?.match(new RegExp(query, regexFlag))){
-                        highlights.push( { type: 'Feature', geometry: onscreenSegments[i].geometry, id: onscreenSegments[i].id });
-                        segmentsHighlighted.ids.push(onscreenSegments[i].id);
+                        highlights.push( { type: 'Feature', geometry: thisSeg.geometry, id: thisSeg.id });
+                        segmentsHighlighted.ids.push(thisSeg.id);
                     }
                     else{
-                        if(onscreenSegments[i].alternateStreetIds){
-                            let alts = onscreenSegments[i].alternateStreetIds;
+                        if(thisSeg.alternateStreetIds){
+                            let alts = thisSeg.alternateStreetIds;
                             for(let j=0; j < alts.length; j++){
                                 const altSt = wmeSDK.DataModel.Streets.getById( { streetId: alts[j] } );
                                 if(altSt?.name?.match(new RegExp(query, regexFlag))){
-                                    highlights.push( { type: 'Feature', geometry: onscreenSegments[i].geometry, id: onscreenSegments[i].id });
-                                    segmentsHighlighted.ids.push(onscreenSegments[i].id);
+                                    highlights.push( { type: 'Feature', geometry: thisSeg.geometry, id: thisSeg.id });
+                                    segmentsHighlighted.ids.push(thisSeg.id);
                                     break;
                                 }
                             }
@@ -221,14 +233,15 @@
                 }
             else {
                 wmeSDK.Map.removeAllFeaturesFromLayer({ layerName: scriptName });
-                WazeWrap.Events.unregister('moveend', window, regexHighlight);
-                WazeWrap.Events.unregister('zoomend', window, regexHighlight);
+                eventOff( "wme-map-move-end", regexHighlight );
+                eventOff( "wme-map-zoom-changed", regexHighlight );
+
                 //$('#WMEES_regexCounts').remove();
                 }
         }
         else{
-            WazeWrap.Events.unregister('moveend', window, regexHighlight);
-            WazeWrap.Events.unregister('zoomend', window, regexHighlight);
+            eventOff( "wme-map-move-end", regexHighlight );
+            eventOff( "wme-map-zoom-changed", regexHighlight );
             wmeSDK.Map.removeAllFeaturesFromLayer({ layerName: scriptName });
             $('#WMEES_regexCounts').remove();
         }
@@ -263,12 +276,23 @@
             processed = true;
         }
         else if(pasteVal.match(regexs.wazeurl)){
-            let params = pasteVal.match(/lon=(-?\d*.\d*)&lat=(-?\d*.\d*)&zoom(?:Level)?=(\d+)/);
-            let lon = pasteVal.match(/lon=(-?\d*.\d*)/)[1];
-            let lat = pasteVal.match(/lat=(-?\d*.\d*)/)[1];
-            let zoom = parseInt(pasteVal.match(/zoom(?:Level)?=(\d+)/)[1]);
-            if(pasteVal.match(/zoom=/))
-                zoom += 12;
+            //let params = pasteVal.match(/lon=(-?\d*.\d*)&lat=(-?\d*.\d*)&zoom(?:Level)?=(\d+)/);
+            let zoom, lon, lat;
+            let lonm = pasteVal.match(/lon=(-?\d*.\d*)/);
+            if (lonm) { lon = lonm[1]; }
+            let latm = pasteVal.match(/lat=(-?\d*.\d*)/);
+            if (latm) { lat = latm[1]; }
+            if (lon && lat) {
+                zoom = parseInt(pasteVal.match(/zoom(?:Level)?=(\d+)/)[1]);
+                if(pasteVal.match(/zoom=/))
+                    zoom += 12;
+            }
+            else {
+                const lm = pasteVal.match(/to=ll.(-?\d*.\d*)%2C(-?\d*.\d*)/);
+                lon = lm[2];
+                lat = lm[1];
+                zoom = 18;
+            }
             zoom = (Math.max(12,Math.min(22,zoom)));
             jump4326(lon, lat, zoom);
             if(pasteVal.match(/&segments=(.*)(?:&|$)/)){
@@ -312,80 +336,79 @@
                     $('#layer-switcher-group_permanent_hazards').click();
             }
 
-            WazeWrap.Model.onModelReady(async function(){
-                await waitFeaturesLoaded();
-                //Check for selected objects
-                if(pasteVal.match(/&segments=(.*?)(?:$|&)/)){
-                    let segs = pasteVal.match(/&segments=(.*?)(?:$|&)/)[1];
-                    segs = segs.split(',');
-                    selection.objectType = "segment";
-                    for(let i=0; i <segs.length; i++) {
-                        const s = wmeSDK.DataModel.Segments.getById( { segmentId: +segs[i] } );
-                        if (s) { selection.ids.push(+segs[i]); }
-                    }
+            await waitFeaturesLoaded();
+            //Check for selected objects
+            if(pasteVal.match(/&segments=(.*?)(?:$|&)/)){
+                let segs = pasteVal.match(/&segments=(.*?)(?:$|&)/)[1];
+                segs = segs.split(',');
+                selection.objectType = "segment";
+                for(let i=0; i <segs.length; i++) {
+                    const s = wmeSDK.DataModel.Segments.getById( { segmentId: +segs[i] } );
+                    if (s) { selection.ids.push(+segs[i]); }
                 }
-                if(pasteVal.match(/&segmentSuggestions=(.*?)(?:$|&)/)){
-                    let segs = pasteVal.match(/&segmentSuggestions=(.*?)(?:$|&)/)[1];
-                    selection.objectType = "segmentSuggestion";
-                    segs = segs.split(',');
-                    for(let i=0; i <segs.length; i++) {
-                        if (W.model.segmentSuggestions.getObjectById(segs[i])) { selection.ids.push(+segs[i]); }
-                    }
+            }
+            if(pasteVal.match(/&segmentSuggestions=(.*?)(?:$|&)/)){
+                let segs = pasteVal.match(/&segmentSuggestions=(.*?)(?:$|&)/)[1];
+                selection.objectType = "segmentSuggestion";
+                segs = segs.split(',');
+                for(let i=0; i <segs.length; i++) {
+                    if (W.model.segmentSuggestions.getObjectById(segs[i])) { selection.ids.push(+segs[i]); }
                 }
+            }
 
-                if(pasteVal.match(/&venues=(.*?)(?:&|$)/)){
-                    let venues = pasteVal.match(/&venues=(.*?)(?:&|$)/)[1];
-                    venues = venues.split(',');
-                    selection.objectType = "venue";
-                    for(let i=0; i <venues.length; i++) {
-                        const v = wmeSDK.DataModel.Venues.getById( { venueId: venues[i] } );
-                        if (v) { selection.ids.push(venues[i]); }
-                    }
+            if(pasteVal.match(/&venues=(.*?)(?:&|$)/)){
+                let venues = pasteVal.match(/&venues=(.*?)(?:&|$)/)[1];
+                venues = venues.split(',');
+                selection.objectType = "venue";
+                for(let i=0; i <venues.length; i++) {
+                    const v = wmeSDK.DataModel.Venues.getById( { venueId: venues[i] } );
+                    if (v) { selection.ids.push(venues[i]); }
                 }
+            }
 
-                if(pasteVal.match(/&mapUpdateRequest=(\d*)/)){
-                    const urid = pasteVal.match(/&mapUpdateRequest=(\d*)/)[1];
-                    const ur = W.model.mapUpdateRequests.getObjectById(urid)
-                    if (ur != null) {
-                       W.problemsController.showProblem(ur, { showNext: false })
-                    }
+            if(pasteVal.match(/&mapUpdateRequest=(\d*)/)){
+                const urid = pasteVal.match(/&mapUpdateRequest=(\d*)/)[1];
+                const ur = W.model.mapUpdateRequests.getObjectById(urid)
+                if (ur != null) {
+                    W.problemsController.showProblem(ur, { showNext: false })
                 }
+            }
 
-                if(pasteVal.match(/&mapProblem=(\d%2[a-zA-Z]\d*)/)){
-                    let mpid = pasteVal.match(/&mapProblem=(\d%2[a-zA-Z]\d*)/)[1];
-                    mpid = decodeURIComponent(mpid);
-                    const mp = W.model.mapProblems.getObjectById(mpid)
-                    if (mp != null) {
-                       W.problemsController.showProblem(mp, { showNext: false })
-                    }
+            if(pasteVal.match(/&mapProblem=(\d%2[a-zA-Z]\d*)/)){
+                let mpid = pasteVal.match(/&mapProblem=(\d%2[a-zA-Z]\d*)/)[1];
+                mpid = decodeURIComponent(mpid);
+                const mp = W.model.mapProblems.getObjectById(mpid)
+                if (mp != null) {
+                    W.problemsController.showProblem(mp, { showNext: false })
                 }
+            }
 
-                if(pasteVal.match(/&mapComments=(.*)(?:&|$)/)){
-                    const mc = pasteVal.match(/&mapComments=(.*)(?:&|$)/)[1];
-                    const m = wmeSDK.DataModel.MapComments.getById( { mapCommentId: mc } );
-                    selection.objectType = "mapComment";
-                    if (m) { selection.ids.push(mc); }
-                }
+            if(pasteVal.match(/&mapComments=(.*)(?:&|$)/)){
+                const mc = pasteVal.match(/&mapComments=(.*)(?:&|$)/)[1];
+                const m = wmeSDK.DataModel.MapComments.getById( { mapCommentId: mc } );
+                selection.objectType = "mapComment";
+                if (m) { selection.ids.push(mc); }
+            }
 
-                if(pasteVal.match(/&permanentHazards=(\d*)/)){
-                    const hzid = pasteVal.match(/&permanentHazards=(\d*)/)[1];
-                    selection.objectType = "permanentHazard";
-                    // SDK - need way to verify its a valid hazard on screen
-                    //const h = wmeSDK.DataModel.PermanentHazards.getById( { xxxId: +hzid } );
-                    selection.ids.push(+hzid);
+            if(pasteVal.match(/&permanentHazards=(\d*)/)){
+                const hzid = pasteVal.match(/&permanentHazards=(\d*)/)[1];
+                selection.objectType = "permanentHazard";
+                // SDK - need way to verify its a valid hazard on screen
+                //const h = wmeSDK.DataModel.PermanentHazards.getById( { xxxId: +hzid } );
+                selection.ids.push(+hzid);
 
-                }
+            }
 
-                if (selection.ids.length > 0 ) {
-                    wmeSDK.Editing.setSelection( { selection } );
-                }
+            if (selection.ids.length > 0 ) {
+                wmeSDK.Editing.setSelection( { selection } );
+            }
 
-                setTimeout(() => {$(`${searchBoxTarget}`)[0].value = '';}, 100);
-            }, true, this);
+            setTimeout(() => {$(`${searchBoxTarget}`)[0].value = '';}, 100);
+
         }
         else if(pasteVal.match(regexs.livemapshareurlold)){
             let params = pasteVal.match(regexs.livemapshareurlold);
-            jump4326(params[2], params[1], 6);
+            jump4326(params[2], params[1], 18);
             processed = true;
         }
         else if(pasteVal.match(regexs.livemapshareurl)){
@@ -395,7 +418,7 @@
         }
         else if(pasteVal.match(regexs.gmapurlold)){
             let params = pasteVal.match(/maps\?ll=(-?\d*.\d*),(-?\d*.\d*)/);
-            jump4326(params[2], params[1], 6);
+            jump4326(params[2], params[1], 18);
             processed = true;
         }
         else if(pasteVal.match(regexs.gmapurl)){
@@ -429,7 +452,7 @@
             jump4326(params[2], params[1], params[3]);
             processed = true;
         }
-        else if(pasteVal.match(regexs.what3wordsurl)){
+        /* else if(pasteVal.match(regexs.what3wordsurl)){
             try{
                 let words = pasteVal.match(regexs.what3wordsurl)[1];
                 let result = await $.get(`https://api.what3words.com/v3/convert-to-coordinates?words=${words}&key=7ZWY99SE`);
@@ -438,7 +461,7 @@
             }catch(err){
                 alert("The three word address provided is not valid");
             }
-        }
+        } */
         else if(pasteVal.match(regexs.pluscodeurl)){
             let code = pasteVal.match(regexs.pluscodeurl)[1];
             try{
@@ -466,15 +489,15 @@
             processed = true;
             parsePaste(`https://www.waze.com/editor/${url}`);
         }
-        else if(pasteVal.match(/[a-z]*\.[a-z]*\.[a-z]*/)){ //What3words code pasted directly
-            try{
+        // else if(pasteVal.match(/[a-z]*\.[a-z]*\.[a-z]*/)){ //What3words code pasted directly
+        /*    try{
                 let result = await $.get(`https://api.what3words.com/v3/convert-to-coordinates?words=${pasteVal}&key=7ZWY99SE`);
                 jump4326(result.coordinates.lng, result.coordinates.lat);
                 processed = true;
             }catch(err){
                 alert("The three word address provided is not valid");
             }
-        }
+        } */
         else if(pasteVal.match(/\d*\.\d*\.\d*/)){ //Waze Place/mapComment id pasted directly
             const landmark = wmeSDK.DataModel.Venues.getById( { venueId: pasteVal } );
             const mapcomment = wmeSDK.DataModel.MapComments.getById( { mapCommentId: pasteVal } );
@@ -486,7 +509,7 @@
                 wmeSDK.Editing.setSelection( { selection: { ids: [pasteVal], objectType: 'mapComment' } } )
                 processed = true;
             }
-            else{ //use segmentFinder to find the venue, jump there & select
+         /*   else{ //use segmentFinder to find the venue, jump there & select
                 try{
                     let result = await WazeWrap.Util.findVenue(wmeSDK.Settings.getRegionCode(), pasteVal);
                     if(result){
@@ -501,39 +524,42 @@
                 catch(err){
                     console.log(err);
                 }
-            }
+            }*/
         }
         else if(pasteVal.match(regexs.segmentid)){
             let segsArr = pasteVal.split(',');
             selection.objectType = "segment";
+            let result = null;
             for(let i=0; i <segsArr.length; i++) {
-                const s = wmeSDK.DataModel.Segments.getById( { segmentId: +segsArr[i] } );
-                if (s) { selection.ids.push(+segsArr[i]); }
+                result = wmeSDK.DataModel.Segments.getById( { segmentId: +segsArr[i] } );
+                if (result) { break; }
             }
-            if (selection.ids.length > 0 ) {
-                wmeSDK.Editing.setSelection( { selection } );
-            }
-            else{
+
+            try{
                 //Couldn't find segment(s) - try to locate the first one and then select them all
-                try{
-                    let result = await WazeWrap.Util.findSegment(wmeSDK.Settings.getRegionCode(), segsArr[0]); //await $.get(`https://w-tools.org/api/SegmentFinder?find=${segsArr[0]}`);
-                    if(result){
-                        jump4326(result.x, result.y, 18); //jumping to z18 to try and ensure all segments are on screen, without zooming out too far
-                        WazeWrap.Model.onModelReady(async () =>{
-                            await waitFeaturesLoaded();
-                            for(let i=0; i <segsArr.length; i++) {
-                                const s = wmeSDK.DataModel.Segments.getById( { segmentId: +segsArr[i] } );
-                                if (s) { selection.ids.push(+segsArr[i]); }
-                            }
-                            $(`${searchBoxTarget}`)[0].value = '';
-                            wmeSDK.Editing.setSelection( { selection } );
-                        }, true, this);
-                    }
+                if (!result) {
+                    let result = await wmeSDK.DataModel.Segments.findSegment( { segmentId: +segsArr[0] } );
                 }
-                catch(err){
-                    console.log(err);
+                if(result){
+                    //jump4326(result.x, result.y, 18); //jumping to z18 to try and ensure all segments are on screen, without zooming out too far
+                    let center = turf.centroid(result.geometry);
+                    let lonLat = { lat: center.geometry.coordinates[1], lon: center.geometry.coordinates[0] };
+                    wmeSDK.Map.setMapCenter({ lonLat, zoomLevel: 18} );
+
+                    await waitFeaturesLoaded();
+                    for(let i=0; i <segsArr.length; i++) {
+                        const s = wmeSDK.DataModel.Segments.getById( { segmentId: +segsArr[i] } );
+                        if (s) { selection.ids.push(+segsArr[i]); }
+                    }
+                    $(`${searchBoxTarget}`)[0].value = '';
+                    wmeSDK.Editing.setSelection( { selection } );
+
                 }
             }
+            catch(err){
+                console.log(err);
+            }
+
         }
 
         if(processed)
@@ -549,10 +575,11 @@
         var count = 1;
         return new Promise(function (resolve) {
             var interval = setInterval(function () {
-                const ldf = W.app.layout.model.attributes.loadingFeatures; // SDK - need access to this status
+                const ldf = W.app.attributes.loadingFeatures; // SDK - need access to this status
+                const pend = W.app.attributes.pendingOperations.length;
                 count++;
 
-                if (!ldf) {
+                if (!ldf && pend == 0) {
                     clearInterval(interval);
                     resolve(null);
                 }
